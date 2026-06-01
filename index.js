@@ -1,46 +1,31 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 const {
     joinVoiceChannel,
-    VoiceConnectionStatus,
-    entersState
+    VoiceConnectionStatus
 } = require('@discordjs/voice');
+
+console.log('=== BOT STARTING ===');
+console.log('TOKEN exists:', !!process.env.TOKEN);
+console.log('GUILD_ID:', process.env.GUILD_ID);
+console.log('CHANNEL_ID:', process.env.CHANNEL_ID);
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
 let connection = null;
 let reconnecting = false;
 
-let lastWhenYaReply = 0;
-let spamCombo = 0;
-
-const normalReplies = [
-    'when ya mulu kampoeng',
-    'sabar dikit kampoeng',
-    'nanya when ya terus kampoeng',
-    'gue juga ga tau kampoeng',
-    'besok tanya lagi kampoeng',
-];
-
-const spamReplies = [
-    'ga usah spam gua kampoeng',
-    'baru juga dijawab kampoeng',
-    'sabar napa kampoeng',
-    'nanya mulu kampoeng',
-    'otak when ya doang kampoeng',
-    'cooldown dulu kampoeng',
-    'udah gue jawab kampoeng',
-    'ga capek nanya kampoeng',
-    'coba baca chat sebelumnya kampoeng'
-];
-
+// ===== VOICE CONNECT =====
 async function connectToVoice() {
     try {
+        console.log('Connecting to voice...');
+
         const guild = await client.guilds.fetch(process.env.GUILD_ID);
 
         connection = joinVoiceChannel({
@@ -51,7 +36,11 @@ async function connectToVoice() {
             selfDeaf: true
         });
 
-        connection.on('stateChange', (_, newState) => {
+        console.log('Voice connection created');
+
+        connection.on('stateChange', (oldState, newState) => {
+            console.log(`VOICE: ${oldState.status} -> ${newState.status}`);
+
             if (
                 newState.status === VoiceConnectionStatus.Disconnected ||
                 newState.status === VoiceConnectionStatus.Destroyed
@@ -60,118 +49,70 @@ async function connectToVoice() {
             }
         });
 
-        await entersState(
-            connection,
-            VoiceConnectionStatus.Ready,
-            30000
-        );
-
-        console.log('Connected to voice');
     } catch (err) {
-        console.error(err);
+        console.error('Voice error:', err);
         reconnect();
     }
 }
 
-async function reconnect() {
+// ===== RECONNECT =====
+function reconnect() {
     if (reconnecting) return;
 
     reconnecting = true;
 
+    console.log('Reconnecting in 3 seconds...');
+
     try {
-        if (connection) {
-            connection.destroy();
-        }
-    } catch {}
+        if (connection) connection.destroy();
+    } catch (err) {
+        console.error(err);
+    }
 
     setTimeout(async () => {
         reconnecting = false;
         await connectToVoice();
-    }, 10000);
+    }, 3000);
 }
 
-client.once('ready', async () => {
+// ===== READY =====
+client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}`);
 
     await connectToVoice();
 
+    // backup checker
     setInterval(async () => {
         try {
-            if (
-                !connection ||
-                connection.state.status ===
-                    VoiceConnectionStatus.Disconnected ||
-                connection.state.status ===
-                    VoiceConnectionStatus.Destroyed
-            ) {
+            const guild = await client.guilds.fetch(process.env.GUILD_ID);
+            const member = await guild.members.fetch(client.user.id);
+
+            const currentChannel = member.voice.channelId;
+
+            if (currentChannel !== process.env.CHANNEL_ID) {
+                console.log('Bot not in correct channel, reconnecting...');
                 reconnect();
             }
-        } catch {}
-    }, 60000);
-});
-
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-
-    const content = message.content.toLowerCase();
-
-    if (!content.includes('when ya')) return;
-
-    const now = Date.now();
-
-    if (now - lastWhenYaReply < 10000) {
-        spamCombo++;
-
-        let reply;
-
-        switch (spamCombo) {
-            case 1:
-                reply = spamReplies[
-                    Math.floor(Math.random() * spamReplies.length)
-                ];
-                break;
-
-            case 2:
-                reply = 'masih aja kampoeng';
-                break;
-
-            case 3:
-                reply = 'cari hobi sana kampoeng';
-                break;
-
-            case 4:
-                reply = 'mute nih lama lama kampoeng';
-                break;
-
-            case 5:
-                reply = '🩴';
-                break;
-
-            default:
-                reply = [
-                    '🩴',
-                    '🚪',
-                    '🙄',
-                    '💀',
-                    'kampoeng.'
-                ][Math.floor(Math.random() * 5)];
+        } catch (err) {
+            console.error(err);
         }
-
-        await message.reply(reply);
-        return;
-    }
-
-    spamCombo = 0;
-    lastWhenYaReply = now;
-
-    const reply =
-        normalReplies[Math.floor(Math.random() * normalReplies.length)];
-
-    await message.reply(reply);
+    }, 30000);
 });
 
+// ===== VOICE STATE (instant fix if kicked/moved) =====
+client.on('voiceStateUpdate', (oldState, newState) => {
+    if (newState.id !== client.user.id) return;
+
+    if (newState.channelId !== process.env.CHANNEL_ID) {
+        console.log('Bot was moved or disconnected. Rejoining...');
+        reconnect();
+    }
+});
+
+// ===== SAFETY =====
 client.on('error', console.error);
 process.on('unhandledRejection', console.error);
 process.on('uncaughtException', console.error);
 
+// ===== LOGIN =====
 client.login(process.env.TOKEN);
